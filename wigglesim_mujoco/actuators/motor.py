@@ -35,6 +35,7 @@ class GearedStepper:
 
     backlash_arcmin: float = 0.0
     detent_torque: float = 0.0  # at motor shaft
+    output_friction: float = 0.0  # Coulomb friction at the gearbox output (bearings, gear mesh), N*m
     detent_harmonics: tuple[tuple[int, float, float], ...] = ((4, 1.0, 0.0),)    # (electrical harmonic order, relative amplitude, phase in rad)
 
 
@@ -63,6 +64,11 @@ class GearedStepper:
     @property
     def full_step_output_deg(self) -> float:
         return self.step_angle_deg / self.ratio
+
+    @property
+    def microstep_output_arcsec(self) -> float:
+        """Commanded output angle per microstep at the preset microstep setting, arcsec."""
+        return self.full_step_output_deg / self.microsteps * 3600.0
 
     @property
     def cogging_output_amplitude(self) -> float:

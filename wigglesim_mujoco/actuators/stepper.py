@@ -23,7 +23,9 @@ def configure_stepper_hinges(spec, motor: GearedStepper, names: tuple[str, ...])
     """Set reflected inertia and the torque limit on named hinge actuators."""
     for name in names:
         actuator = spec.actuator(name)
-        spec.joint(actuator.target).armature = motor.reflected_inertia
+        joint = spec.joint(actuator.target)
+        joint.armature = motor.reflected_inertia
+        joint.frictionloss = motor.output_friction
         limit = motor.emergency_output_torque
         actuator.ctrlrange = [-limit, limit]
         actuator.ctrllimited = 1

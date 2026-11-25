@@ -46,6 +46,7 @@ def configure_dcmotors(
         actuator.ctrlrange = [-motor.supply_voltage, motor.supply_voltage]
         actuator.ctrllimited = 1
         joint.armature = motor.reflected_inertia
+        joint.frictionloss = motor.output_friction
         joint.damping[0] += motor.efficiency * motor.ratio**2 * motor.motor_damping
 
 
@@ -97,7 +98,14 @@ class DCStepperBank:
         )
 
     def winding_power(self, data: mujoco.MjData) -> float:
-        """Return copper loss for the effective current states."""
+        """Return copper loss in W, summed over all motors.
+
+        The winding state is only the torque-producing current. An open-loop (position mode)
+        drive holds run_current in the windings whatever the load (ia^2 + ib^2 = run_current^2
+        for sine/cosine microstepping), so that is the loss there, as in StepperBank.
+        """
+        if self.mode == "position":
+            return float(self.motor.phase_resistance * self.motor.run_current ** 2 * len(self.actuators))
         return float(self.motor.phase_resistance * np.sum(data.act[self._current] ** 2))
 
     def reset(self, data: mujoco.MjData) -> None:
