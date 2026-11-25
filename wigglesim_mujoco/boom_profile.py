@@ -18,8 +18,8 @@ from wigglesim_mujoco.actuators.stepper_dcmotor import DCStepperBank, configure_
 #### sim settings #############################3
 DT = 0.0001
 ALT_KM = 400.0
-T_END = 20.0
-LOG_EVERY = 5
+T_END = 300.0
+LOG_EVERY = 50            # 200 Hz log; use 1 to resolve the cogging waveform on short runs
 
 MODE = "position"         # "position": open-loop steps of gearbox-output angle (rad)
                           # "torque"  : closed-loop commutation of gearbox-output torque (N*m)
@@ -27,21 +27,36 @@ SAVE_DIR = Path(__file__).resolve().parents[1] / "plots"
 SAVE_LOG = Path(__file__).resolve().parents[1] / "log.npz"
 SHOW_PLOTS = False
 
-#### smooth boom command profile ###########################
-BOOM_ANGLE_DEG = 20.0     # command amplitude, position mode
-BOOM_TORQUE = 6.0         # command amplitude, torque mode
-BOOM_FREQ_HZ = 0.2
+#### boom command profile ###########################
+PROFILE = "reject"        # "reject": a constant disturbance torque acts on the bus and the booms are
+                          #           commanded (open loop) to absorb it. The bus still drifts slowly under
+                          #           the torques the command does not know about (see GRAVITY_GRADIENT); the
+                          #           steps and ripple on top of that drift are the actuator's doing.
+                          # "sine"  : phase-shifted sinusoids on the three booms, no disturbance.
 RAMP_S = 5.0
+# "reject": body-frame disturbance torque (N*m). The paper's Fig. 6 shows 0.05-0.17 uN*m per axis.
+DIST_TORQUE = np.array([0.10, -0.15, 0.08]) * 1e-6
+GRAVITY_GRADIENT = False  # mjorbit's within-body gravity-gradient torque. Its per-body differential gravity
+                          # is always on, and through the 0.75 m tip masses that alone is a ~0.2 uN*m
+                          # gravity-gradient torque on the spacecraft.
+# "sine"
+BOOM_ANGLE_DEG = 5.0      # command amplitude, position mode
+BOOM_TORQUE = 2.0e-7      # command amplitude, torque mode (N*m)
+BOOM_FREQ_HZ = 0.01
+
+JITTER_WINDOW_S = 10.0    # pointing jitter is reported over windows of this length
 
 COMPLIANT = False # for motor mounts
-MOTOR_PART = "5718L-01P-HP50"
+MOTOR_PART = "PG15S-D20-HHB9"
 MOTOR = MOTOR_PRESETS[MOTOR_PART]
 MOTOR_BACKEND = "dcmotor"  # "two_phase" or "dcmotor"
 ACTUATOR_NAMES = ("act_x", "act_y", "act_z")
 COGGING = True
 DETENT_MNM = MOTOR.detent_torque * 1e3  # peak motor-shaft detent torque (mN*m)
 MICROSTEPS = MOTOR.microsteps
+OUTPUT_FRICTION = MOTOR.output_friction  # Coulomb friction at the gearbox output (N*m); no preset has data
 TUMBLE_DEG_S = [0.0, 0.0, 0.0]   # initial body rate (deg/s) to test detumbling
+ARCSEC = np.degrees(1.0) * 3600.0  # arcseconds per radian
 
 def smoothstep(x):
     """C2 ramp 0 -> 1. A linear ramp has a velocity step at its ends, which a stiff, lightly
@@ -50,16 +65,40 @@ def smoothstep(x):
     return x ** 3 * (10.0 - 15.0 * x + 6.0 * x * x)
 
 
-def controller(t):
-    """Gearbox-output command. Replace with your attitude controller.
+def smoothstep_double_integral(t, ramp):
+    """Integral from 0 to t of the integral of smoothstep(t / ramp): the angle reached under an
+    acceleration that ramps from 0 to 1 over `ramp` seconds and then stays at 1."""
+    if t <= 0.0:
+        return 0.0
+    if t < ramp:
+        x = t / ramp
+        return ramp ** 2 * (0.5 * x ** 5 - 0.5 * x ** 6 + x ** 7 / 7.0)
+    return ramp ** 2 / 7.0 + 0.5 * ramp * (t - ramp) + 0.5 * (t - ramp) ** 2
 
-    position mode -> shaft angles (rad); torque mode -> shaft torques (N*m).
-    With compliance, actual boom angle relative to the bus includes motor mount twist.
-    Keep position commands smooth (no velocity steps) or the stepper will ring / lose steps.
+
+def rejection_feedforward(layout, shaft_dofs, torque_body):
+    """Boom motion that absorbs a torque on the bus, linearised about the current pose at rest.
+
+    Solves the mass-matrix equations for zero bus angular acceleration: the torque on the bus
+    rotational DOFs is `torque_body`, the motor shafts carry unknown torques, bus translation is
+    free, and sprung joints (compliant mounts) are taken as rigid: they settle to a static twist
+    and pass the torque through. Returns (shaft accelerations, shaft torques).
+    This is the paper's feedforward term u = -J_boom^-1 tau, with the off-axis coupling from the
+    hinge offsets and the reflected rotor inertia included.
     """
-    ramp = smoothstep(t / RAMP_S)
-    amp = BOOM_TORQUE if MODE == "torque" else np.deg2rad(BOOM_ANGLE_DEG)
-    return amp * ramp * np.sin(2 * np.pi * BOOM_FREQ_HZ * t + np.array([0.0, 2.0, 4.0]))
+    data = mujoco.MjData(layout)
+    mujoco.mj_forward(layout, data)
+    M = np.zeros((layout.nv, layout.nv))
+    mujoco.mj_fullM(layout, M, data.qM)
+    rot = np.arange(3, 6)
+    sprung = np.flatnonzero(layout.jnt_stiffness[layout.dof_jntid] > 0.0)
+    moving = np.setdiff1d(np.arange(layout.nv), np.concatenate([rot, sprung]))  # DOFs that accelerate
+    passive = np.setdiff1d(moving, shaft_dofs)                # ... with no applied force
+    rows = np.concatenate([rot, passive])
+    rhs = np.concatenate([torque_body, np.zeros(len(passive))])
+    acc = np.zeros(layout.nv)
+    acc[moving] = np.linalg.solve(M[np.ix_(rows, moving)], rhs)
+    return acc[shaft_dofs], (M @ acc)[shaft_dofs]
 
 
 class BoomSimulation:
@@ -70,7 +109,7 @@ class BoomSimulation:
         xml_path = Path(__file__).with_name(xml_name)
         mj_spec = mujoco.MjSpec.from_file(str(xml_path))
         self.backend = MOTOR_BACKEND
-        self.motor = replace(MOTOR, detent_torque=DETENT_MNM * 1e-3)
+        self.motor = replace(MOTOR, detent_torque=DETENT_MNM * 1e-3, output_friction=OUTPUT_FRICTION)
         if self.backend == "dcmotor":
             configure_dcmotors(mj_spec, self.motor, ACTUATOR_NAMES, cogging=COGGING)
         elif self.backend == "two_phase":
@@ -84,6 +123,12 @@ class BoomSimulation:
         shaft_joints = [layout.joint(f"{axis}_{suffix}_joint").id for axis in "xyz"]
         self.shaft_q = layout.jnt_qposadr[shaft_joints]
         self.shaft_v = layout.jnt_dofadr[shaft_joints]
+        self.disturbance = np.zeros(3)
+        if PROFILE == "reject":
+            self.disturbance = np.asarray(DIST_TORQUE, float)
+            self.ff_accel, self.ff_torque = rejection_feedforward(layout, self.shaft_v, self.disturbance)
+        elif PROFILE != "sine":
+            raise ValueError("PROFILE must be 'reject' or 'sine'")
         if COMPLIANT:
             flex_joints = [layout.joint(f"{axis}_mount_joint").id for axis in "xyz"]
             self.flex_q = layout.jnt_qposadr[flex_joints]
@@ -92,7 +137,7 @@ class BoomSimulation:
             self.flex_damping = layout.dof_damping[self.flex_v]
 
         spec = MjoSpec.from_mj_spec(mj_spec)
-        spec.mjorbit.use_gravity_gradient = True
+        spec.mjorbit.use_gravity_gradient = GRAVITY_GRADIENT
         spec.mjorbit.use_j2 = False
         spec.mjorbit.use_drag = False
         spec.mjorbit.use_srp = False
@@ -117,10 +162,27 @@ class BoomSimulation:
             self.motors.reset(self.data.qpos[self.shaft_q])
         self.cogging_torque = np.zeros(len(ACTUATOR_NAMES))
 
+    def command(self, t):
+        """Gearbox-output command. Replace with your attitude controller.
+
+        position mode -> shaft angles (rad); torque mode -> shaft torques (N*m).
+        With compliance, actual boom angle relative to the bus includes motor mount twist.
+        Keep position commands smooth (no velocity steps) or the stepper will ring / lose steps.
+        """
+        if PROFILE == "reject":
+            if MODE == "torque":
+                return self.ff_torque * smoothstep(t / RAMP_S)
+            return self.ff_accel * smoothstep_double_integral(t, RAMP_S)
+        ramp = smoothstep(t / RAMP_S)
+        amp = BOOM_TORQUE if MODE == "torque" else np.deg2rad(BOOM_ANGLE_DEG)
+        return amp * ramp * np.sin(2 * np.pi * BOOM_FREQ_HZ * t + np.array([0.0, 2.0, 4.0]))
+
     def apply_control(self):
         """Write controls before advancing physics and return the profile command."""
         data = self.data
-        cmd = controller(data.time)
+        cmd = self.command(data.time)
+        # Free-joint rotational DOFs are body-frame, so this is a body-fixed torque on the bus.
+        data.qfrc_applied[3:6] = self.disturbance * smoothstep(data.time / RAMP_S)
         if self.backend == "dcmotor":
             self.cogging_torque = self.motors.cogging_torque(data)
             self.motors.step(data, cmd)
@@ -157,6 +219,27 @@ def quat_angle_deg(q, q0):
     rel = np.stack([w1*w2 - x1*x2 - y1*y2 - z1*z2, w1*x2 + x1*w2 + y1*z2 - z1*y2,
                     w1*y2 - x1*z2 + y1*w2 + z1*x2, w1*z2 + x1*y2 - y1*x2 + z1*w2], axis=1)
     return np.degrees(2 * np.arctan2(np.linalg.norm(rel[:, 1:], axis=1), np.abs(rel[:, 0])))
+
+
+def pointing_error_arcsec(quat, t, window_s):
+    """Bus rotation from its initial attitude, as (N,3) small-angle rotation vectors in arcsec, and
+    the jitter: RMS of what is left after removing a quadratic trend from each `window_s` window.
+    The trend removal drops slow drift a feedback loop would take out; steps and ripple remain."""
+    q0 = quat[0] * np.array([1, -1, -1, -1])
+    w1, v1 = q0[0], q0[1:]
+    w2, v2 = quat[:, 0], quat[:, 1:]
+    vec = w1 * v2 + w2[:, None] * v1 + np.cross(v1, v2)
+    scal = w1 * w2 - v2 @ v1
+    rotvec = 2.0 * vec * np.sign(scal)[:, None] * ARCSEC
+    n = int(round(window_s / (t[1] - t[0])))
+    resid = []
+    for k in range(0, len(t) - n + 1, n):
+        tt = t[k:k + n] - t[k]
+        A = np.stack([np.ones(n), tt, tt ** 2], axis=1)
+        seg = rotvec[k:k + n]
+        resid.append(seg - A @ np.linalg.lstsq(A, seg, rcond=None)[0])
+    jitter = np.sqrt(np.mean(np.sum(np.concatenate(resid) ** 2, axis=1))) if resid else np.nan
+    return rotvec, jitter
 
 
 def psd(x, fs):
@@ -216,8 +299,10 @@ def make_plots(L):
     for j, c in enumerate("xyz"):
         ax[1].plot(t, np.degrees(L["gyro"][:, j]), label=f"w{c}")
     ax[1].set_ylabel("gyro (deg/s)")
-    ax[2].plot(t, quat_angle_deg(L["quat"], L["quat"][0]), label="angle from start")
-    ax[2].set_ylabel("rotation from\ninitial attitude (deg)")
+    rotvec, _ = pointing_error_arcsec(L["quat"], t, JITTER_WINDOW_S)
+    for j, c in enumerate("xyz"):
+        ax[2].plot(t, rotvec[:, j], label=f"about {c}")
+    ax[2].set_ylabel("rotation from\ninitial attitude (arcsec)")
     finish(ax)
 
     # (3) motor internals
@@ -293,7 +378,6 @@ def make_plots(L):
 def main():
     sim = BoomSimulation()
     model, data, motors = sim.model, sim.data, sim.motors
-    print("central body:", model.central_body)
     # ---- 5. Sim loop ------------------------------------------------------------
     n_steps = int(round(T_END / DT))
     n_log = n_steps // LOG_EVERY + 1
@@ -346,12 +430,12 @@ def main():
                 log["coupling_torque"][i] = tau
             n_row += 1
 
-        if k % int(2.0 / DT) == 0:
+        if k % max(1, n_steps // 10) == 0:
             gyro = data.sensors.measure("gyro", noisy=False)
-            print(f"t={data.time:5.1f}s  gyro={np.round(gyro, 4)}  "
-                  f"quat={np.round(data.qpos[3:7], 3)}  "
-                  f"booms(deg)={np.round(np.degrees(sim.boom_angles()), 1)}  "
-                  f"cog={np.sqrt(np.mean(sim.cogging_torque ** 2)):.2f} N*m rms")
+            print(f"t={data.time:6.1f}s  gyro={np.round(np.degrees(gyro) * 3600.0, 2)} arcsec/s  "
+                  f"quat={np.round(data.qpos[3:7], 6)}  "
+                  f"booms(deg)={np.round(np.degrees(sim.boom_angles()), 4)}  "
+                  f"cog={np.sqrt(np.mean(sim.cogging_torque ** 2)):.3g} N*m rms")
 
     print("Chief position (km):", data.orbit.R_eci)
     log = {k: v[:n_row] for k, v in log.items()}
@@ -370,10 +454,19 @@ def main():
         spc = 1.0 / (f_cog * DT) if f_cog > 0 else np.inf
         print(f"cogging {f_cog:.0f} Hz at peak speed -> {spc:.1f} physics samples/cycle"
               + ("   WARNING: under-sampled, lower DT" if spc < 5 else ""))
-    print(f"hinge torque: {np.sqrt(np.mean(log['tau'] ** 2)):.2f} N*m rms, {np.abs(log['tau']).max():.2f} N*m peak "
+    print(f"hinge torque: {np.sqrt(np.mean(log['tau'] ** 2)):.3g} N*m rms, {np.abs(log['tau']).max():.3g} N*m peak "
           f"(nominal output torque {MOTOR.nominal_output_torque:g} N*m)")
-    print(f"cogging torque: {np.sqrt(np.mean(log['cog'] ** 2)):.2f} N*m rms")
-    print(f"final body rate: {np.round(np.degrees(log['gyro'][-1]), 5)} deg/s")
+    print(f"cogging torque: {np.sqrt(np.mean(log['cog'] ** 2)):.3g} N*m rms")
+    print(f"winding loss: {np.mean(log['winding_w']):.3g} W mean, all motors")
+    print(f"final body rate: {np.round(np.degrees(log['gyro'][-1]) * 3600.0, 3)} arcsec/s")
+    rotvec, jitter = pointing_error_arcsec(log["quat"], log["t"], JITTER_WINDOW_S)
+    err = np.linalg.norm(rotvec, axis=1)
+    print(f"bus pointing error: {np.sqrt(np.mean(err ** 2)):.3g} arcsec rms, {err.max():.3g} arcsec peak; "
+          f"jitter over {JITTER_WINDOW_S:g} s windows {jitter:.3g} arcsec rms")
+    if PROFILE == "reject":
+        print(f"  (commanded disturbance {np.round(DIST_TORQUE * 1e6, 3)} uN*m. The slow drift left over is mostly the\n"
+              f"   gravity-gradient torque through the booms, which this open-loop command does not cancel;\n"
+              f"   compare actuators on the jitter figure.)")
 
 
 if __name__ == "__main__":

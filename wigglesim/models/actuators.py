@@ -47,12 +47,12 @@ class BoomArray:
             axis / np.linalg.norm(axis) for axis in config['boom_axes']
         ])  # (3, 3) normalized hinge unit vectors
         
-        self.m_rods = np.array(config.get('m_rods', [0.1, 0.1, 0.1]))  # kg
-        self.m_tips = np.array(config.get('m_tips', [0.05, 0.05, 0.05]))  # kg
-        self.l_rods = np.array(config.get('l_rods', [0.5, 0.5, 0.5]))  # m
+        self.m_rods = np.array(config.get('m_rods', [0.03, 0.03, 0.03]))  # kg
+        self.m_tips = np.array(config.get('m_tips', [0.2, 0.2, 0.2]))  # kg
+        self.l_rods = np.array(config.get('l_rods', [0.75, 0.75, 0.75]))  # m
         self.r_hinges = np.array(config.get('r_hinges', [
-            [0.05, 0.0, 0.0], 
-            [0.0, 0.05, 0.0], 
+            [0.183, 0.0, 0.0],
+            [0.0, 0.113, 0.0],
             [0.0, 0.0, 0.05]
         ]))  # (3, 3) hinge attachment vectors in base body frame
 

@@ -1,0 +1,6 @@
+Lin 5718L-01P-HP50 peak output speed 0.042 rad/s (preset speed limit 20.94 rad/s)
+hinge torque: 1.33 N*m rms, 8.02 N*m peak (nominal output torque 50 N*m)
+cogging torque: 2.46 N*m rms
+winding loss: 25.9 W mean, all motors
+bus pointing error: 1e+03 arcsec rms, 2.37e+03 arcsec peak; jitter over 10 s windows 2.19 arcsec rms
+  (disturbance [ 0.1  -0.15  0.08] uN*m; an ideal actuator leaves ~0)

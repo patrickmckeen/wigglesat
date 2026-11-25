@@ -30,9 +30,9 @@ def system_angmom():
 def controller(m, d):
     """Placeholder open-loop command: phase-shifted sinusoids on each boom (N*m)."""
     t = d.time
-    d.ctrl[0] = 0.2 * np.sin(2 * np.pi * 0.5 * t)
-    d.ctrl[1] = 0.2 * np.sin(2 * np.pi * 0.5 * t + 2.0)
-    d.ctrl[2] = 0.2 * np.sin(2 * np.pi * 0.5 * t + 4.0)
+    d.ctrl[0] = 2e-6 * np.sin(2 * np.pi * 0.05 * t)
+    d.ctrl[1] = 2e-6 * np.sin(2 * np.pi * 0.05 * t + 2.0)
+    d.ctrl[2] = 2e-6 * np.sin(2 * np.pi * 0.05 * t + 4.0)
 
 
 mujoco.set_mjcb_control(controller)

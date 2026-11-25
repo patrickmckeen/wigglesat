@@ -1,0 +1,6 @@
+NMB PG15S-D20-HHB9 peak output speed 0.001 rad/s (preset speed limit 4.92 rad/s)
+hinge torque: 0.000155 N*m rms, 0.000654 N*m peak (nominal output torque 0.0105 N*m)
+cogging torque: 0 N*m rms
+winding loss: 0.3 W mean, all motors
+bus pointing error: 1e+03 arcsec rms, 2.37e+03 arcsec peak; jitter over 10 s windows 4.63 arcsec rms
+  (disturbance [ 0.1  -0.15  0.08] uN*m; an ideal actuator leaves ~0)

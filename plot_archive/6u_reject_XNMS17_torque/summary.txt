@@ -1,0 +1,6 @@
+Zaber X-NMS17-E01-KX14C peak output speed 0.000 rad/s (preset speed limit 314.16 rad/s)
+hinge torque: 1.14e-07 N*m rms, 1.53e-07 N*m peak (nominal output torque 0.58 N*m)
+cogging torque: 0 N*m rms
+winding loss: 1.84e-12 W mean, all motors
+bus pointing error: 870 arcsec rms, 1.91e+03 arcsec peak; jitter over 10 s windows 0.000559 arcsec rms
+  (disturbance [ 0.1  -0.15  0.08] uN*m; an ideal actuator leaves ~0)

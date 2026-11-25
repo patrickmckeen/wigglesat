@@ -1,5 +1,12 @@
-<mujoco model="multipleshapes">
-  <compiler angle="degree" inertiafromgeom="false"/>
+<mujoco model="wigglesat_6u">
+  <!-- 6U CubeSat with three actuated tip-mass booms, sized to the regime of Tracy, Manchester &
+       Douglas, "Ultra-Fine Pointing for Nanosatellite Telescopes With Actuated Booms" (2022).
+       The paper gives no boom dimensions; these follow from its disturbance level, see
+       motor_sizing.py:
+         bus   12 kg, 0.366 x 0.226 x 0.100 m  ->  J = diag(0.061, 0.144, 0.185) kg m^2
+         boom  0.75 m rod (30 g) + 200 g tip mass  ->  0.118 kg m^2 about its hinge
+       Inertias are computed from the geoms (each geom carries its mass). -->
+  <compiler angle="degree"/>
   <option timestep="0.0001" gravity="0 0 0" integrator="implicitfast"/>
 
   <visual>
@@ -13,40 +20,42 @@
   </asset>
 
   <default>
-    <joint type="hinge" limited="false" damping="0.01" armature="0.1264"/>
+    <!-- armature (reflected rotor inertia) and motor damping are set from the motor preset -->
+    <joint type="hinge" limited="false" damping="0" armature="0"/>
     <geom contype="0" conaffinity="0"/>
-    <motor ctrlrange="-150 150" ctrllimited="true"/>
+    <motor ctrlrange="-1 1" ctrllimited="true"/>
+    <default class="rod">
+      <geom type="capsule" size="0.004" mass="0.03" material="cyan"/>
+    </default>
+    <default class="tip">
+      <geom type="sphere" size="0.02" mass="0.2" material="cyan"/>
+    </default>
   </default>
 
   <worldbody>
     <light pos="4 -4 6" dir="-1 1 -1.5" diffuse="0.9 0.9 0.9"/>
 
-    <!-- sc_bus: 3 x 1 x 1 m box, 10 kg -->
     <body name="sc_bus" pos="0 0 0">
       <freejoint name="bus_free"/>
-      <inertial pos="0 0 0" mass="10" diaginertia="1.66667 8.33333 8.33333"/>
-      <geom name="bus_box" type="box" size="1.5 0.5 0.5" material="bus_mat"/>
-      <site name="imu" pos="0 0 0" size="0.02"/>
+      <geom name="bus_box" type="box" size="0.183 0.113 0.05" mass="12" material="bus_mat"/>
+      <site name="imu" pos="0 0 0" size="0.005"/>
 
-      <!-- x_arm: joint on the +x end face, axis x, arm extends along +z, 2 kg, 0.2 x 0.2 x 3 m -->
-      <body name="x_arm_link" pos="1.5 0 0">
+      <body name="x_arm_link" pos="0.183 0 0">
         <joint name="x_arm_joint" axis="1 0 0"/>
-        <inertial pos="0 0 1.5" mass="2" diaginertia="1.50667 1.50667 0.0133333"/>
-        <geom type="box" size="0.1 0.1 1.5" pos="0 0 1.5" material="cyan"/>
+        <geom class="rod" fromto="0 0 0 0 0 0.75"/>
+        <geom class="tip" pos="0 0 0.75"/>
       </body>
 
-      <!-- y_arm: joint on the +y face, axis y, arm extends along +z -->
-      <body name="y_arm_link" pos="0 0.5 0">
+      <body name="y_arm_link" pos="0 0.113 0">
         <joint name="y_arm_joint" axis="0 1 0"/>
-        <inertial pos="0 0 1.5" mass="2" diaginertia="1.50667 1.50667 0.0133333"/>
-        <geom type="box" size="0.1 0.1 1.5" pos="0 0 1.5" material="cyan"/>
+        <geom class="rod" fromto="0 0 0 0 0 0.75"/>
+        <geom class="tip" pos="0 0 0.75"/>
       </body>
 
-      <!-- z_arm: joint on the +z face, axis z, arm extends along -x -->
-      <body name="z_arm_link" pos="0 0 0.5">
+      <body name="z_arm_link" pos="0 0 0.05">
         <joint name="z_arm_joint" axis="0 0 1"/>
-        <inertial pos="-1.5 0 0" mass="2" diaginertia="0.0133333 1.50667 1.50667"/>
-        <geom type="box" size="1.5 0.1 0.1" pos="-1.5 0 0" material="cyan"/>
+        <geom class="rod" fromto="0 0 0 -0.75 0 0"/>
+        <geom class="tip" pos="-0.75 0 0"/>
       </body>
     </body>
   </worldbody>

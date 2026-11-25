@@ -49,18 +49,23 @@ if __name__ == "__main__":
         0.0, 0.0, 0.0
     ])
 
+    # 6U CubeSat with 0.75 m tip-mass booms: the same spacecraft as wigglesim_mujoco/sat_booms.xml
+    # (see wigglesim_mujoco/motor_sizing.py for where the boom size comes from).
     config = {
-        'J': np.diag([0.05, 0.05, 0.08]),
+        'J': np.diag([0.061, 0.144, 0.185]),   # 12 kg, 0.366 x 0.226 x 0.100 m bus [kg m^2]
         'booms': {
             'boom_axes': [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-            'm_rods': [0.1, 0.1, 0.1],
-            'm_tips': [0.05, 0.05, 0.05],
-            'l_rods': [0.5, 0.5, 0.5],
+            'boom_dirs': [[0, 0, 1], [0, 0, 1], [-1, 0, 0]],
+            'm_rods': [0.03, 0.03, 0.03],
+            'm_tips': [0.2, 0.2, 0.2],
+            'l_rods': [0.75, 0.75, 0.75],
             'r_hinges': [
-                [0.05, 0.0, 0.0],
-                [0.0, 0.05, 0.0],
+                [0.183, 0.0, 0.0],
+                [0.0, 0.113, 0.0],
                 [0.0, 0.0, 0.05]
             ],
+            # Only used with motor_dynamics=True. These are NEMA-17-class numbers, 1e4-1e5 times the
+            # ~0.1 uN*m the booms need; the actuator studies live in wigglesim_mujoco.
             'motor_config': {
             'N_r': 50,             # 50 pole pairs (1.8 deg step angle)
             'T_holding': 0.15,     # Peak holding torque [N*m]
@@ -76,13 +81,15 @@ if __name__ == "__main__":
         'motor_dynamics': False
     }
 
+    # Boom accelerations that would absorb a (0.10, -0.15, 0.08) uN*m disturbance: tau / J_boom,
+    # J_boom = 0.118 kg m^2. With no disturbance modelled here, the body turns the other way instead.
     controller = DirectInputController(
-        np.array([0.5, -0.3, 0.1]), # boom accel input [rad/s^2]; with motor_dynamics=True these are commanded angles [rad]
+        np.array([8.5e-7, -1.27e-6, 6.8e-7]), # boom accel input [rad/s^2]; with motor_dynamics=True these are commanded angles [rad]
         np.array([0.0, 0.0, 0.0]) # magnetorquer dipole input
     )
 
     simulator = Simulator(config=config, controller=controller, init_state=init_state)
-    t_hist, x_hist = simulator.run(sim_time=10.0, dt=0.01)
+    t_hist, x_hist = simulator.run(sim_time=600.0, dt=1.0)
 
     plot_simulation_results(t_hist, x_hist, save_fig=False)
     animate_booms_3d(t_hist, x_hist, config, stride=3, save_gif=False)
