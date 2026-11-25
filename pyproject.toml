@@ -1,7 +1,7 @@
 [project]
 name = "wigglesat"
 version = "0.1.0"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "matplotlib>=3.11.2",
     "mjorbit",
@@ -11,5 +11,8 @@ dependencies = [
     "viser>=1.1.1",
 ]
 
+[dependency-groups]
+dev = ["pytest>=8"]
+
 [tool.uv.sources]
-mjorbit = { path = "../mjorbit", editable = true }
+mjorbit = { git = "https://github.com/johnzhang3/mjorbit", rev = "a09090671fe6299b1085d235623e4b2d00b4e675" }

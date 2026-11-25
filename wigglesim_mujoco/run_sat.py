@@ -5,13 +5,15 @@
     python run_sat.py --viewer   # interactive viewer
 """
 import sys
+from pathlib import Path
+
 import numpy as np
 import mujoco
 
-model = mujoco.MjModel.from_xml_path("sat_booms.xml")
+model = mujoco.MjModel.from_xml_path(str(Path(__file__).with_name("sat_booms.xml")))
 data = mujoco.MjData(model)
 
-bus_id = model.body("bus").id
+bus_id = model.body("sc_bus").id
 
 
 def sensor(name):
