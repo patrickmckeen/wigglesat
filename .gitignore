@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+# boom_profile.py outputs
+/plots/
+/log.npz
