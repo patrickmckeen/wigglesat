@@ -300,3 +300,84 @@ def test_body_rate_follows_boom_rate(sat, i):
         theta[i] = 0.5 * alpha * tk**2
         expected_w = -(alpha * tk) * np.linalg.solve(ref_inertia(sat, theta), ref_g(sat, i, theta[i]))
         np.testing.assert_allclose(x[4:7], expected_w, atol=1e-8)
+
+# --------------------------------------------------------------------------- 3) motor-driven booms
+class SpringMotor:
+    """Stand-in for the stepper: a linear torsion spring to the commanded angle (conservative)."""
+    k = 0.05
+
+    def compute_motor_torque(self, theta, theta_dot, theta_cmd):
+        return -self.k * (theta - theta_cmd)
+
+
+def make_motor_sat(motor=None):
+    cfg = make_config()
+    cfg['motor_dynamics'] = True
+    s = WiggleSat(cfg, make_state())
+    if motor is not None:
+        s.Booms.motors = [motor] * 3
+    return s
+
+
+def test_motor_mode_matches_prescribed_mode_for_same_acceleration(sat):
+    """Feeding the coupled solve's theta_ddot back in as a prescribed acceleration gives the same w_dot."""
+    msat = make_motor_sat(SpringMotor())
+    x = make_state(w=np.array([0.3, -0.2, 0.4]), theta=np.array([0.1, -0.2, 0.3]),
+                   theta_dot=np.array([0.2, 0.1, -0.1]))
+    dx_motor = msat.state_derivative(0.0, x, np.array([0.5, -0.3, 0.1]), ZERO3)
+    dx_presc = sat.state_derivative(0.0, x, dx_motor[10:13], ZERO3)
+    np.testing.assert_allclose(dx_motor, dx_presc, atol=1e-12)
+
+
+def test_motor_mode_hinge_acceleration_feels_chassis_reaction():
+    """
+    From rest, hinge torques tau give   theta_ddot = (D - G^T J^-1 G)^-1 tau,   D = diag(J_boom),
+    G = [g_1 g_2 g_3]: the chassis recoils, so the driven boom moves faster relative to it than
+    tau / J_boom, and the undriven booms (free hinges here) get dragged along.
+    """
+    msat = make_motor_sat(SpringMotor())
+    cmd = np.array([0.4, 0.0, 0.0])
+    dx = msat.state_derivative(0.0, make_state(), cmd, ZERO3)
+
+    tau = SpringMotor.k * cmd
+    G = np.column_stack([ref_g(msat, i, 0.0) for i in range(3)])
+    D = np.diag(msat.Booms.inertias)
+    expected = np.linalg.solve(D - G.T @ np.linalg.solve(ref_inertia(msat, ZERO3), G), tau)
+    np.testing.assert_allclose(dx[10:13], expected, rtol=1e-12, atol=1e-14)
+    assert dx[10] > 1.05 * tau[0] / msat.Booms.inertias[0]   # the coupling is not a rounding error
+
+
+def test_motor_mode_conserves_momentum_and_energy_with_spring_motor():
+    """Internal conservative hinge torques: |H| and T + spring energy are both constant."""
+    msat = make_motor_sat(SpringMotor())
+    cmd = np.array([0.5, -0.3, 0.1])
+    x0 = make_state(w=np.array([0.3, -0.2, 0.4]), theta=np.array([0.1, -0.2, 0.3]),
+                    theta_dot=np.array([0.2, 0.1, -0.1]))
+    _, X = integrate(msat, x0, cmd)
+
+    H_norm = np.array([np.linalg.norm(ref_momentum(msat, x)) for x in X])
+    E = np.array([msat.kinetic_energy(x) + 0.5 * SpringMotor.k * np.sum((x[7:10] - cmd) ** 2) for x in X])
+    assert np.ptp(H_norm) < 1e-9
+    assert np.ptp(E) < 1e-9
+    assert np.ptp(X[:, 7], axis=0) > 0.2   # non-vacuous: the booms really oscillated
+
+
+def test_kinetic_energy_matches_distributed_mass_model(sat):
+    x = make_state(w=np.array([0.3, -0.2, 0.4]), theta=np.array([0.1, -0.2, 0.3]),
+                   theta_dot=np.array([0.2, 0.1, -0.1]))
+    w, theta, theta_dot = x[4:7], x[7:10], x[10:13]
+    T = 0.5 * w @ sat.J_base @ w
+    for i in range(3):
+        for m, r, v in point_masses(sat, i, theta[i]):
+            vel = np.cross(w, r) + theta_dot[i] * v
+            T += 0.5 * m * vel @ vel
+    assert sat.kinetic_energy(x) == pytest.approx(T, rel=1e-12)
+
+
+def test_motor_mode_conserves_momentum_with_stepper_model():
+    """The default stepper (detent, cogging, friction) is still an internal torque: |H| stays constant."""
+    msat = make_motor_sat()
+    x0 = make_state(w=np.array([0.05, -0.02, 0.04]))
+    _, X = integrate(msat, x0, np.array([0.02, -0.01, 0.015]), T=2.0, n=20)
+    H_norm = np.array([np.linalg.norm(ref_momentum(msat, x)) for x in X])
+    assert np.ptp(H_norm) < 1e-9

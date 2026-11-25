@@ -119,10 +119,15 @@ class BoomArray:
             g_rate = g_rate + m * np.cross(r, np.cross(a, v))   # (v x v) term is zero
         return g_rate
 
+    def motor_torques(self, theta, theta_dot, theta_cmd):
+        """Hinge torque applied by each stepper to its boom (and reacted on the chassis)."""
+        return np.array([self.motors[i].compute_motor_torque(theta[i], theta_dot[i], theta_cmd[i])
+                         for i in range(3)])
+
     def compute_reaction_torque(self, theta, theta_dot, alpha_booms, w_base, use_motor = False):
         """
-        Torque on the chassis from boom motion, from conservation of total angular momentum
-        H = J(theta) w + sum_i g_i(theta_i) theta_dot_i :
+        Torque on the chassis from prescribed boom motion (hinge accelerations alpha_booms), from
+        conservation of total angular momentum H = J(theta) w + sum_i g_i(theta_i) theta_dot_i :
 
             tau_reaction = -sum_i [ g_i * theta_ddot_i + g_i' * theta_dot_i^2 + theta_dot_i * (w x g_i) ]
 
@@ -130,16 +135,15 @@ class BoomArray:
         change of g_i with boom angle, and the third the gyroscopic coupling with chassis spin.
         (The J_dot * w term lives in WiggleSat.state_derivative.)
         Returns (theta_ddot, tau_reaction).
+
+        With motor torques instead of prescribed accelerations, theta_ddot depends on the chassis
+        acceleration, so that case is solved as one coupled system in WiggleSat.state_derivative.
         """
-        theta_ddot = np.zeros(3)
+        if use_motor:
+            raise ValueError("motor-driven booms are solved in WiggleSat.state_derivative")
+        theta_ddot = np.asarray(alpha_booms, dtype=float).copy()
         tau_reaction = np.zeros(3)
         for i in range(3):
-            if use_motor:
-                tau_motor = self.motors[i].compute_motor_torque(theta[i], theta_dot[i], alpha_booms[i])
-                theta_ddot[i] = float(tau_motor / self.inertias[i])
-            else:
-                theta_ddot[i] = alpha_booms[i]
-
             g = self.momentum_vector(i, theta[i])
             g_rate = self.momentum_vector_rate(i, theta[i])
             tau_reaction -= (g * theta_ddot[i]

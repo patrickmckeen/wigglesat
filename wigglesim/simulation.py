@@ -77,7 +77,7 @@ if __name__ == "__main__":
     }
 
     controller = DirectInputController(
-        np.array([0.5, -0.3, 0.1]), # boom accel input
+        np.array([0.5, -0.3, 0.1]), # boom accel input [rad/s^2]; with motor_dynamics=True these are commanded angles [rad]
         np.array([0.0, 0.0, 0.0]) # magnetorquer dipole input
     )
 
